@@ -138,6 +138,12 @@ try:
 except:
     ixuca_available = False
 
+try:
+    import habana_frameworks.torch.hpu as hthpu
+    hpu_available =  hthpu.is_available()
+except:
+    hpu_available = hpu_available or (hasattr(torch, "hpu") and torch.hpu.is_available())
+
 if args.cpu:
     cpu_state = CPUState.CPU
 
@@ -165,6 +171,13 @@ def is_ixuca():
     global ixuca_available
     if ixuca_available:
         return True
+
+def is_intel_hpu():
+    global cpu_state
+    global hpu_available
+    if cpu_state == CPUState.GPU:
+        if hpu_available:
+            return True
     return False
 
 def get_torch_device():
@@ -184,6 +197,8 @@ def get_torch_device():
             return torch.device("npu", torch.npu.current_device())
         elif is_mlu():
             return torch.device("mlu", torch.mlu.current_device())
+        elif is_intel_hpu():
+            return torch.device("hpu")
         else:
             return torch.device(torch.cuda.current_device())
 
@@ -217,6 +232,14 @@ def get_total_memory(dev=None, torch_total_too=False):
             _, mem_total_mlu = torch.mlu.mem_get_info(dev)
             mem_total_torch = mem_reserved
             mem_total = mem_total_mlu
+            mem_total = torch.xpu.get_device_properties(dev).total_memory
+        elif is_intel_hpu():
+            import habana_frameworks.torch as htorch
+            stats = htorch.hpu.memory_stats()
+            mem_reserved = stats['MaxInUse']
+            mem_total_torch = mem_reserved
+            #mem_total = torch.hpu.get_device_properties(dev).total_memory
+            mem_total = stats["Limit"]
         else:
             stats = torch.cuda.memory_stats(dev)
             mem_reserved = stats['reserved_bytes.all.current']
@@ -324,6 +347,9 @@ try:
             if ENABLE_PYTORCH_ATTENTION == False and args.use_split_cross_attention == False and args.use_quad_cross_attention == False:
                 ENABLE_PYTORCH_ATTENTION = True
     if is_intel_xpu() or is_ascend_npu() or is_mlu() or is_ixuca():
+        if args.use_split_cross_attention == False and args.use_quad_cross_attention == False:
+            ENABLE_PYTORCH_ATTENTION = True
+    if is_intel_hpu():
         if args.use_split_cross_attention == False and args.use_quad_cross_attention == False:
             ENABLE_PYTORCH_ATTENTION = True
 except:
@@ -437,6 +463,8 @@ def get_torch_device_name(device):
         return "{} {}".format(device, torch.npu.get_device_name(device))
     elif is_mlu():
         return "{} {}".format(device, torch.mlu.get_device_name(device))
+    elif is_intel_hpu():
+        return "{} {}".format(device, torch.hpu.get_device_name(device))
     else:
         return "CUDA {}: {}".format(device, torch.cuda.get_device_name(device))
 
@@ -1182,6 +1210,8 @@ def xformers_enabled():
         return False
     if is_ixuca():
         return False
+    if is_intel_hpu():
+        return False
     if directml_enabled:
         return False
     return XFORMERS_IS_AVAILABLE
@@ -1218,6 +1248,8 @@ def pytorch_attention_flash_attention():
         if is_amd():
             return True #if you have pytorch attention enabled on AMD it probably supports at least mem efficient attention
         if is_ixuca():
+            return True
+        if is_intel_hpu():
             return True
     return False
 
@@ -1266,6 +1298,14 @@ def get_free_memory(dev=None, torch_free_too=False):
             mem_free_mlu, _ = torch.mlu.mem_get_info(dev)
             mem_free_torch = mem_reserved - mem_active
             mem_free_total = mem_free_mlu + mem_free_torch
+        elif is_intel_hpu():
+            stats = torch.hpu.memory_stats(dev)
+            mem_active = stats['InUse']
+            mem_reserved = stats['MaxInUse']
+            mem_free_torch = mem_reserved - mem_active
+            #mem_free_hpu = torch.hpu.get_device_properties(dev).total_memory - mem_reserved
+            mem_free_hpu = stats['Limit'] - mem_reserved
+            mem_free_total = mem_free_hpu + mem_free_torch
         else:
             stats = torch.cuda.memory_stats(dev)
             mem_active = stats['active_bytes.all.current']
@@ -1347,6 +1387,9 @@ def should_use_fp16(device=None, model_params=0, prioritize_performance=True, ma
     if is_ixuca():
         return True
 
+    if is_intel_hpu():
+        return False
+
     if torch.version.hip:
         return True
 
@@ -1419,6 +1462,8 @@ def should_use_bf16(device=None, model_params=0, prioritize_performance=True, ma
             if manual_cast:
                 return True
             return False
+    if is_intel_hpu():
+        return True
 
     props = torch.cuda.get_device_properties(device)
 
