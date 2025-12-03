@@ -63,7 +63,6 @@ class WanSelfAttention(nn.Module):
             freqs(Tensor): Rope freqs, shape [1024, C / num_heads / 2]
         """
         b, s, n, d = *x.shape[:2], self.num_heads, self.head_dim
-
         def qkv_fn_q(x):
             q = self.norm_q(self.q(x)).view(b, s, n, d)
             return apply_rope1(q, freqs)
@@ -75,17 +74,17 @@ class WanSelfAttention(nn.Module):
         #These two are VRAM hogs, so we want to do all of q computation and
         #have pytorch garbage collect the intermediates on the sub function
         #return before we touch k
+
         q = qkv_fn_q(x)
         k = qkv_fn_k(x)
 
         x = optimized_attention(
-            q.view(b, s, n * d),
-            k.view(b, s, n * d),
-            self.v(x).view(b, s, n * d),
+            q.reshape(b, s, n * d) if comfy.model_management.is_intel_hpu() else q.view(b, s, n * d),
+            k.reshape(b, s, n * d) if comfy.model_management.is_intel_hpu() else k.view(b, s, n * d),
+            self.v(x).reshape(b, s, n * d) if comfy.model_management.is_intel_hpu() else self.v(x).view(b, s, n * d),
             heads=self.num_heads,
             transformer_options=transformer_options,
         )
-
         x = self.o(x)
         return x
 
@@ -565,7 +564,9 @@ class WanModel(torch.nn.Module):
                 context_clip = self.img_emb(clip_fea)  # bs x 257 x dim
                 context = torch.concat([context_clip, context], dim=1)
             context_img_len = clip_fea.shape[-2]
-
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
         patches_replace = transformer_options.get("patches_replace", {})
         blocks_replace = patches_replace.get("dit", {})
         for i, block in enumerate(self.blocks):
@@ -578,6 +579,9 @@ class WanModel(torch.nn.Module):
                 x = out["img"]
             else:
                 x = block(x, e=e0, freqs=freqs, context=context, context_img_len=context_img_len, transformer_options=transformer_options)
+            if comfy.model_management.is_intel_hpu():
+                import habana_frameworks.torch.core as htcore
+                htcore.mark_step()
 
         # head
         x = self.head(x, e)

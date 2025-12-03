@@ -1191,6 +1191,12 @@ def unpin_memory(tensor):
 
     return False
 
+def intel_hpu_attention_enabled():
+    return args.use_intel_hpu_attention
+
+def intel_hpu_fa3_enabled():
+    return args.use_intel_hpu_fa3
+
 def sage_attention_enabled():
     return args.use_sage_attention
 
@@ -1388,7 +1394,7 @@ def should_use_fp16(device=None, model_params=0, prioritize_performance=True, ma
         return True
 
     if is_intel_hpu():
-        return False
+        return True
 
     if torch.version.hip:
         return True

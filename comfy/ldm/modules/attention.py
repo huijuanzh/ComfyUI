@@ -8,15 +8,23 @@ from einops import rearrange, repeat
 from typing import Optional, Any, Callable, Union
 import logging
 import functools
+import os
 
 from .diffusionmodules.util import AlphaBlender, timestep_embedding
 from .sub_quadratic_attention import efficient_dot_product_attention
 
 from comfy import model_management
-
 if model_management.xformers_enabled():
     import xformers
     import xformers.ops
+USE_FSDPA = False
+if model_management.intel_hpu_attention_enabled() or model_management.intel_hpu_fa3_enabled():
+    try:
+        from habana_frameworks.torch.hpex.kernels import FusedSDPA
+        USE_FSDPA = True
+    except ModuleNotFoundError:
+        logging.error(f"Cannot find module FusedSDPA")
+        exit(-1)
 
 SAGE_ATTENTION_IS_AVAILABLE = False
 try:
@@ -253,7 +261,6 @@ def attention_sub_quad(query, key, value, heads, mask=None, attn_precision=None,
         else:
             bs = mask.shape[0]
         mask = mask.reshape(bs, -1, mask.shape[-2], mask.shape[-1]).expand(b, heads, -1, -1).reshape(-1, mask.shape[-2], mask.shape[-1])
-
     hidden_states = efficient_dot_product_attention(
         query,
         key,
@@ -560,6 +567,140 @@ def attention_sage(q, k, v, heads, mask=None, attn_precision=None, skip_reshape=
             out = out.reshape(b, -1, heads * dim_head)
     return out
 
+@wrap_attn
+def attention_hpu_fsdpa(q, k, v, heads, mask=None, attn_precision=None, skip_reshape=False, skip_output_reshape=False, dropout_p=0.,causal=False, **kwargs):
+    if skip_reshape:
+        b, _, _, dim_head = q.shape
+    else:
+        b, _, dim_head = q.shape
+        dim_head //= heads
+        q, k, v = map(
+            lambda t: t.reshape(b, -1, heads, dim_head).transpose(1, 2).contiguous(),
+            (q, k, v),
+        )
+
+    if mask is not None:
+        # add a batch dimension if there isn't already one
+        if mask.ndim == 2:
+            mask = mask.unsqueeze(0)# todo: check if this is correct
+        # add a heads dimension if there isn't already one
+        if mask.ndim == 3:
+            mask = mask.unsqueeze(1)
+    if USE_FSDPA:
+            out = FusedSDPA.apply(q, k, v, mask, dropout_p, causal, None, "fast")
+    else:
+        out = torch.nn.functional.scaled_dot_product_attention(
+            q, k, v, attn_mask=mask, is_causal=causal, dropout_p=dropout_p)
+    if skip_output_reshape:
+        out = out.permute(0, 2, 1, 3).contiguous()
+    else:
+        out = out.transpose(1, 2).reshape(b, -1, heads * dim_head)
+    return out
+
+
+@wrap_attn
+def attention_hpu_fa3(q, k, v, heads, mask=None, attn_precision=None, skip_reshape=False, skip_output_reshape=False, dropout_p=0., causal=False, pad_len = 0, cp_size=1, fsdpa_mode="fast",**kwargs):
+    if skip_reshape:
+        b, _, _, dim_head = q.shape
+    else:
+        b, _, dim_head = q.shape
+        dim_head //= heads
+        q, k, v = map(
+            lambda t: t.reshape(b, -1, heads, dim_head).transpose(1, 2).contiguous(),
+            (q, k, v),
+        )
+    q_chunk = int(os.environ.get("FA3_Q_CHUNK", 8192))
+    kv_chunk = int(os.environ.get("FA3_KV_CHUNK", 8192))
+    query_len = q.size(-2)
+    key_len = k.size(-2)
+
+    # In the case of cross-attn, use FusedSDPA.
+    if  (query_len * cp_size) != key_len:
+        output = FusedSDPA.apply(
+            q,
+            k,
+            v,
+            mask,
+            0.0,
+            False,
+            None,
+            fsdpa_mode,
+            None
+        )
+        if skip_output_reshape:
+            return output.permute(0, 2, 1, 3).contiguous()
+        else:
+            return output.transpose(1, 2).reshape(b, -1, heads * dim_head)
+
+    #Flash Attention V3 for Full Attention
+    linv_factor = 128.0 if fsdpa_mode == "fast" else 1.0
+
+    if pad_len > 0:
+        k = k[:, :, :-pad_len, :]
+        v = v[:, :, :-pad_len, :]
+        key_len = k.size(-2)
+
+    num_query_chunk = int((query_len - 1) / q_chunk) + 1
+    num_kv_chunk = int((key_len - 1) / kv_chunk) + 1
+
+    final_hidden_list = []
+
+    for query_idx in range(num_query_chunk):
+
+        query_start = query_idx * q_chunk
+        query_end = (query_idx + 1) * q_chunk if query_idx < num_query_chunk - 1 else query_len
+        query_slice = q[..., query_start:query_end, :]
+
+        out = None
+        m = None
+        linv = None
+
+        for kv_idx in range(num_kv_chunk):
+
+            kv_start = kv_idx * kv_chunk
+            kv_end = (kv_idx + 1) * kv_chunk if kv_idx < num_kv_chunk - 1 else key_len
+
+            key_slice = k[..., kv_start:kv_end, :]
+            value_slice = v[..., kv_start:kv_end, :]
+
+            block_out, block_m, block_linv, _ = torch.ops.hpu.sdpa_recomp_fwd(
+                query_slice,
+                key_slice,
+                value_slice,
+                None,
+                0.0,
+                1 / math.sqrt(q.shape[-1]),
+                False,
+                True,
+                fsdpa_mode,
+                None, #vsl,
+                "left",
+            )
+
+            if kv_idx == 0:
+                out = block_out.to(torch.float32)
+                m = block_m.to(torch.float32)
+                linv = block_linv.to(torch.float32) * linv_factor
+            else:
+                block_linv = block_linv.to(torch.float32) * linv_factor
+                block_m = block_m.to(torch.float32)
+                block_out = block_out.to(torch.float32)
+                new_m = torch.maximum(m, block_m)
+                l_rescaled = (1.0 / linv) * torch.exp(m - new_m)
+                block_l_rescaled = (1.0 / block_linv) * torch.exp(block_m - new_m)
+                new_linv = 1.0 / (l_rescaled + block_l_rescaled)
+                out = (l_rescaled * new_linv) * out + (block_l_rescaled * new_linv) * block_out
+                linv = new_linv
+                m = new_m
+
+        final_hidden_list.append(out.to(q.dtype))
+    output = torch.cat(final_hidden_list, dim=-2)
+
+    if skip_output_reshape:
+        output = output.permute(0, 2, 1, 3).contiguous()
+    else:
+        output = output.transpose(1, 2).reshape(b, -1, heads * dim_head)
+    return output
 
 try:
     @torch.library.custom_op("flash_attention::flash_attn", mutates_args=())
@@ -621,7 +762,13 @@ def attention_flash(q, k, v, heads, mask=None, attn_precision=None, skip_reshape
 
 optimized_attention = attention_basic
 
-if model_management.sage_attention_enabled():
+if model_management.intel_hpu_attention_enabled():
+    logging.info("Using intel hpu fsdpa attention")
+    optimized_attention = attention_hpu_fsdpa
+elif model_management.intel_hpu_fa3_enabled():
+    logging.info("Using intel hpu fsdpa attention 3")
+    optimized_attention = attention_hpu_fa3
+elif model_management.sage_attention_enabled():
     logging.info("Using sage attention")
     optimized_attention = attention_sage
 elif model_management.xformers_enabled():
@@ -654,6 +801,9 @@ if model_management.xformers_enabled():
 register_attention_function("pytorch", attention_pytorch)
 register_attention_function("sub_quad", attention_sub_quad)
 register_attention_function("split", attention_split)
+if USE_FSDPA:
+    register_attention_function("fsdpa", attention_hpu_fsdpa)
+    register_attention_function("hpu_fa3", attention_hpu_fa3)
 
 
 def optimized_attention_for_device(device, mask=False, small_input=False):
