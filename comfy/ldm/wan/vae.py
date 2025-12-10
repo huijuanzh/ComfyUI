@@ -298,6 +298,9 @@ class Encoder3d(nn.Module):
                 x = layer(x, feat_cache, feat_idx)
             else:
                 x = layer(x)
+            if comfy.model_management.is_intel_hpu():
+                import habana_frameworks.torch.core as htcore
+                htcore.mark_step()
 
         ## middle
         for layer in self.middle:
@@ -305,6 +308,9 @@ class Encoder3d(nn.Module):
                 x = layer(x, feat_cache, feat_idx)
             else:
                 x = layer(x)
+            if comfy.model_management.is_intel_hpu():
+                import habana_frameworks.torch.core as htcore
+                htcore.mark_step()
 
         ## head
         for layer in self.head:
@@ -323,6 +329,9 @@ class Encoder3d(nn.Module):
                 feat_idx[0] += 1
             else:
                 x = layer(x)
+            if comfy.model_management.is_intel_hpu():
+                import habana_frameworks.torch.core as htcore
+                htcore.mark_step()
         return x
 
 
@@ -404,6 +413,9 @@ class Decoder3d(nn.Module):
                 x = layer(x, feat_cache, feat_idx)
             else:
                 x = layer(x)
+            if comfy.model_management.is_intel_hpu():
+                import habana_frameworks.torch.core as htcore
+                htcore.mark_step()
 
         ## upsamples
         for layer in self.upsamples:
@@ -411,6 +423,9 @@ class Decoder3d(nn.Module):
                 x = layer(x, feat_cache, feat_idx)
             else:
                 x = layer(x)
+            if comfy.model_management.is_intel_hpu():
+                import habana_frameworks.torch.core as htcore
+                htcore.mark_step()
 
         ## head
         for layer in self.head:
@@ -429,6 +444,9 @@ class Decoder3d(nn.Module):
                 feat_idx[0] += 1
             else:
                 x = layer(x)
+            if comfy.model_management.is_intel_hpu():
+                import habana_frameworks.torch.core as htcore
+                htcore.mark_step()
         return x
 
 

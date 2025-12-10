@@ -132,6 +132,9 @@ class AutoencodingEngine(AbstractAutoencoder):
         unregularized: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, dict]]:
         z = self.encoder(x)
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
         if unregularized:
             return z, dict()
         z, reg_log = self.regularization(z)
@@ -141,6 +144,9 @@ class AutoencodingEngine(AbstractAutoencoder):
 
     def decode(self, z: torch.Tensor, **kwargs) -> torch.Tensor:
         x = self.decoder(z, **kwargs)
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
         return x
 
     def forward(
