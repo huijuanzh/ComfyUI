@@ -199,10 +199,16 @@ class BaseModel(torch.nn.Module):
         t = self.process_timestep(t, x=x, **extra_conds)
         if "latent_shapes" in extra_conds:
             xc = utils.unpack_latents(xc, extra_conds.pop("latent_shapes"))
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
 
         model_output = self.diffusion_model(xc, t, context=context, control=control, transformer_options=transformer_options, **extra_conds)
         if len(model_output) > 1 and not torch.is_tensor(model_output):
             model_output, _ = utils.pack_latents(model_output)
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
 
         return self.model_sampling.calculate_denoised(sigma, model_output.float(), x)
 
