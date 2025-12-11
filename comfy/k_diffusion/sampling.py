@@ -203,6 +203,9 @@ def sample_euler(model, x, sigmas, extra_args=None, callback=None, disable=None,
         dt = sigmas[i + 1] - sigma_hat
         # Euler method
         x = x + d * dt
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
     return x
 
 
@@ -228,6 +231,9 @@ def sample_euler_ancestral(model, x, sigmas, extra_args=None, callback=None, dis
             # Euler method
             dt = sigma_down - sigmas[i]
             x = x + d * dt + noise_sampler(sigmas[i], sigmas[i + 1]) * s_noise * sigma_up
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
     return x
 
 @torch.no_grad()
@@ -256,6 +262,9 @@ def sample_euler_ancestral_RF(model, x, sigmas, extra_args=None, callback=None, 
             x = sigma_down_i_ratio * x + (1 - sigma_down_i_ratio) * denoised
             if eta > 0:
                 x = (alpha_ip1 / alpha_down) * x + noise_sampler(sigmas[i], sigmas[i + 1]) * s_noise * renoise_coeff
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
     return x
 
 @torch.no_grad()
@@ -290,6 +299,9 @@ def sample_heun(model, x, sigmas, extra_args=None, callback=None, disable=None, 
             d_2 = to_d(x_2, sigmas[i + 1], denoised_2)
             d_prime = (d + d_2) / 2
             x = x + d_prime * dt
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
     return x
 
 
@@ -326,6 +338,9 @@ def sample_dpm_2(model, x, sigmas, extra_args=None, callback=None, disable=None,
             denoised_2 = model(x_2, sigma_mid * s_in, **extra_args)
             d_2 = to_d(x_2, sigma_mid, denoised_2)
             x = x + d_2 * dt_2
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
     return x
 
 
@@ -359,6 +374,9 @@ def sample_dpm_2_ancestral(model, x, sigmas, extra_args=None, callback=None, dis
             d_2 = to_d(x_2, sigma_mid, denoised_2)
             x = x + d_2 * dt_2
             x = x + noise_sampler(sigmas[i], sigmas[i + 1]) * s_noise * sigma_up
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
     return x
 
 @torch.no_grad()
@@ -393,6 +411,9 @@ def sample_dpm_2_ancestral_RF(model, x, sigmas, extra_args=None, callback=None, 
             d_2 = to_d(x_2, sigma_mid, denoised_2)
             x = x + d_2 * dt_2
             x = (alpha_ip1/alpha_down) * x + noise_sampler(sigmas[i], sigmas[i + 1]) * s_noise * renoise_coeff
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
     return x
 
 def linear_multistep_coeff(order, t, i, j):
@@ -429,6 +450,9 @@ def sample_lms(model, x, sigmas, extra_args=None, callback=None, disable=None, o
             cur_order = min(i + 1, order)
             coeffs = [linear_multistep_coeff(cur_order, sigmas_cpu, i, j) for j in range(cur_order)]
             x = x + sum(coeff * d for coeff, d in zip(coeffs, reversed(ds)))
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
     return x
 
 
@@ -552,6 +576,9 @@ class DPMSolver(nn.Module):
                 x, eps_cache = self.dpm_solver_3_step(x, t, t_next_, eps_cache=eps_cache)
 
             x = x + su * s_noise * noise_sampler(self.sigma(t), self.sigma(t_next))
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
 
         return x
 
@@ -605,6 +632,9 @@ class DPMSolver(nn.Module):
 
             if self.info_callback is not None:
                 self.info_callback({'x': x, 'i': info['steps'] - 1, 't': s, 't_up': s, 'denoised': denoised, 'error': error, 'h': pid.h, **info})
+            if comfy.model_management.is_intel_hpu():
+                import habana_frameworks.torch.core as htcore
+                htcore.mark_step()
 
         return x, info
 
@@ -671,6 +701,9 @@ def sample_dpmpp_2s_ancestral(model, x, sigmas, extra_args=None, callback=None, 
         # Noise addition
         if sigmas[i + 1] > 0:
             x = x + noise_sampler(sigmas[i], sigmas[i + 1]) * s_noise * sigma_up
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
     return x
 
 
@@ -722,6 +755,9 @@ def sample_dpmpp_2s_ancestral_RF(model, x, sigmas, extra_args=None, callback=Non
         if sigmas[i + 1] > 0 and eta > 0:
             x = (alpha_ip1/alpha_down) * x + noise_sampler(sigmas[i], sigmas[i + 1]) * s_noise * renoise_coeff
         # logged_x = torch.cat((logged_x, x.unsqueeze(0)), dim=0)
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
     return x
 
 
@@ -779,6 +815,9 @@ def sample_dpmpp_sde(model, x, sigmas, extra_args=None, callback=None, disable=N
             x = (alpha_t / alpha_s) * (-h_).exp() * x - alpha_t * (-h_).expm1() * denoised_d
             if eta > 0 and s_noise > 0:
                 x = x + alpha_t * noise_sampler(sigmas[i], sigmas[i + 1]) * s_noise * su
+            if comfy.model_management.is_intel_hpu():
+                import habana_frameworks.torch.core as htcore
+                htcore.mark_step()
     return x
 
 
@@ -805,6 +844,9 @@ def sample_dpmpp_2m(model, x, sigmas, extra_args=None, callback=None, disable=No
             denoised_d = (1 + 1 / (2 * r)) * denoised - (1 / (2 * r)) * old_denoised
             x = (sigma_fn(t_next) / sigma_fn(t)) * x - (-h).expm1() * denoised_d
         old_denoised = denoised
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
     return x
 
 
@@ -859,6 +901,9 @@ def sample_dpmpp_2m_sde(model, x, sigmas, extra_args=None, callback=None, disabl
 
         old_denoised = denoised
         h_last = h
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
     return x
 
 
@@ -926,6 +971,9 @@ def sample_dpmpp_3m_sde(model, x, sigmas, extra_args=None, callback=None, disabl
 
         denoised_1, denoised_2 = denoised, denoised_1
         h_1, h_2 = h, h_1
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
     return x
 
 
@@ -992,6 +1040,9 @@ def generic_step_sampler(model, x, sigmas, extra_args=None, callback=None, disab
         x = step_function(x / torch.sqrt(1.0 + sigmas[i] ** 2.0), sigmas[i], sigmas[i + 1], (x - denoised) / sigmas[i], noise_sampler)
         if sigmas[i + 1] != 0:
             x *= torch.sqrt(1.0 + sigmas[i + 1] ** 2.0)
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
     return x
 
 
@@ -1013,6 +1064,9 @@ def sample_lcm(model, x, sigmas, extra_args=None, callback=None, disable=None, n
         x = denoised
         if sigmas[i + 1] > 0:
             x = model.inner_model.inner_model.model_sampling.noise_scaling(sigmas[i + 1], noise_sampler(sigmas[i], sigmas[i + 1]), x)
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
     return x
 
 
@@ -1071,6 +1125,9 @@ def sample_heunpp2(model, x, sigmas, extra_args=None, callback=None, disable=Non
 
             d_prime = w1 * d + w2 * d_2 + w3 * d_3
             x = x + d_prime * dt
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
     return x
 
 
@@ -1113,6 +1170,9 @@ def sample_ipndm(model, x, sigmas, extra_args=None, callback=None, disable=None,
             buffer_model[-1] = d_cur
         else:
             buffer_model.append(d_cur)
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
 
     return x_next
 
@@ -1179,6 +1239,9 @@ def sample_ipndm_v(model, x, sigmas, extra_args=None, callback=None, disable=Non
             buffer_model[-1] = d_cur.detach()
         else:
             buffer_model.append(d_cur.detach())
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
 
     return x_next
 
@@ -1230,6 +1293,9 @@ def sample_deis(model, x, sigmas, extra_args=None, callback=None, disable=None, 
             buffer_model[-1] = d_cur.detach()
         else:
             buffer_model.append(d_cur.detach())
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
 
     return x_next
 
@@ -1275,6 +1341,9 @@ def sample_euler_ancestral_cfg_pp(model, x, sigmas, extra_args=None, callback=No
             x = alpha_t * denoised + sigma_down * d
             if eta > 0 and s_noise > 0:
                 x = x + alpha_t * noise_sampler(sigmas[i], sigmas[i + 1]) * s_noise * sigma_up
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
     return x
 
 
@@ -1325,6 +1394,9 @@ def sample_dpmpp_2s_ancestral_cfg_pp(model, x, sigmas, extra_args=None, callback
         # Noise addition
         if sigmas[i + 1] > 0:
             x = x + noise_sampler(sigmas[i], sigmas[i + 1]) * s_noise * sigma_up
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
     return x
 
 @torch.no_grad()
@@ -1358,6 +1430,9 @@ def sample_dpmpp_2m_cfg_pp(model, x, sigmas, extra_args=None, callback=None, dis
             denoised_mix = -torch.exp(-h) * uncond_denoised - torch.expm1(-h) * (1 / (2 * r)) * (denoised - old_uncond_denoised)
         x = denoised + denoised_mix + torch.exp(-h) * x
         old_uncond_denoised = uncond_denoised
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
     return x
 
 @torch.no_grad()
@@ -1412,6 +1487,9 @@ def res_multistep(model, x, sigmas, extra_args=None, callback=None, disable=None
                 x = sigma_fn(h) * x + h * (b1 * uncond_denoised + b2 * old_denoised)
             else:
                 x = sigma_fn(h) * x + h * (b1 * denoised + b2 * old_denoised)
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
 
         # Noise addition
         if sigmas[i + 1] > 0:
@@ -1482,6 +1560,9 @@ def sample_gradient_estimation(model, x, sigmas, extra_args=None, callback=None,
                 d_bar = (ge_gamma - 1) * (d - old_d)
                 x = x + d_bar * dt
         old_d = d
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
     return x
 
 
@@ -1553,6 +1634,9 @@ def sample_er_sde(model, x, sigmas, extra_args=None, callback=None, disable=None
             if s_noise > 0:
                 x = x + alpha_t * noise_sampler(sigmas[i], sigmas[i + 1]) * s_noise * (er_lambda_t ** 2 - er_lambda_s ** 2 * r ** 2).sqrt().nan_to_num(nan=0.0)
         old_denoised = denoised
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
     return x
 
 
@@ -1607,6 +1691,9 @@ def sample_seeds_2(model, x, sigmas, extra_args=None, callback=None, disable=Non
             sde_noise = sde_noise * segment_factor.exp()
             sde_noise = sde_noise + segment_factor.mul(2).expm1().neg().sqrt() * noise_sampler(sigma_s_1, sigmas[i + 1])
             x = x + sde_noise * sigmas[i + 1] * s_noise
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
     return x
 
 
@@ -1673,6 +1760,9 @@ def sample_seeds_3(model, x, sigmas, extra_args=None, callback=None, disable=Non
             sde_noise = sde_noise * segment_factor.exp()
             sde_noise = sde_noise + segment_factor.mul(2).expm1().neg().sqrt() * noise_sampler(sigma_s_2, sigmas[i + 1])
             x = x + sde_noise * sigmas[i + 1] * s_noise
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
     return x
 
 
@@ -1777,6 +1867,9 @@ def sample_sa_solver(model, x, sigmas, extra_args=None, callback=None, disable=F
             if tau_t > 0 and s_noise > 0:
                 noise = noise_sampler(sigmas[i], sigmas[i + 1]) * sigmas[i + 1] * (-2 * tau_t ** 2 * h).expm1().neg().sqrt() * s_noise
                 x_pred = x_pred + noise
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
     return x
 
 
