@@ -300,6 +300,15 @@ else:
     except:
         XFORMERS_IS_AVAILABLE = False
 
+INTEL_HPU_ENABLED_VAE = True
+def intel_hpu_enabled_vae():
+    enabled = intel_hpu_attention_enabled() or intel_hpu_fa3_enabled()
+    if not enabled:
+        return False
+
+    return INTEL_HPU_ENABLED_VAE
+
+
 def is_nvidia():
     global cpu_state
     if cpu_state == CPUState.GPU:

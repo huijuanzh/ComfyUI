@@ -9,6 +9,15 @@ from comfy import model_management
 import comfy.ops
 ops = comfy.ops.disable_weight_init
 
+USE_FSDPA = False
+if model_management.intel_hpu_attention_enabled() or model_management.intel_hpu_fa3_enabled():
+    try:
+        from habana_frameworks.torch.hpex.kernels import FusedSDPA
+        USE_FSDPA = True
+    except ModuleNotFoundError:
+        logging.error(f"Cannot find module FusedSDPA")
+        exit(-1)
+
 if model_management.xformers_enabled_vae():
     import xformers
     import xformers.ops
@@ -274,6 +283,28 @@ def xformers_attention(q, k, v):
         out = slice_attention(q.view(B, -1, C), k.view(B, -1, C).transpose(1, 2), v.view(B, -1, C).transpose(1, 2)).reshape(orig_shape)
     return out
 
+def attention_hpu_fsdpa(q, k, v):
+    # compute attention
+    orig_shape = q.shape
+    B = orig_shape[0]
+    C = orig_shape[1]
+    q, k, v = map(
+        lambda t: t.reshape(B, 1, C, -1).transpose(2, 3).contiguous(),
+        (q, k, v),
+    )
+
+    try:
+        if USE_FSDPA:
+            out = FusedSDPA.apply(q, k, v, None, 0., False, None, "fast")
+        else:
+            out = torch.nn.functional.scaled_dot_product_attention(
+                q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False)
+        out = out.transpose(2, 3).reshape(orig_shape)
+    except model_management.OOM_EXCEPTION:
+        logging.warning("scaled_dot_product_attention OOMed: switched to slice attention")
+        out = slice_attention(q.view(B, -1, C), k.view(B, -1, C).transpose(1, 2), v.view(B, -1, C).transpose(1, 2)).reshape(orig_shape)
+    return out
+
 def pytorch_attention(q, k, v):
     # compute attention
     orig_shape = q.shape
@@ -297,6 +328,9 @@ def vae_attention():
     if model_management.xformers_enabled_vae():
         logging.info("Using xformers attention in VAE")
         return xformers_attention
+    elif model_management.intel_hpu_enabled_vae():
+        logging.info("Using intel hpu attention in VAE")
+        return attention_hpu_fsdpa
     elif model_management.pytorch_attention_enabled_vae():
         logging.info("Using pytorch attention in VAE")
         return pytorch_attention
