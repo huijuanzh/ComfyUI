@@ -630,11 +630,16 @@ class Encoder(nn.Module):
                     h = self.down[i_level].attn[i_block](h)
             if i_level != self.num_resolutions-1:
                 h = self.down[i_level].downsample(h)
-
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
         # middle
         h = self.mid.block_1(h, temb)
         h = self.mid.attn_1(h)
         h = self.mid.block_2(h, temb)
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
 
         # end
         h = self.norm_out(h)
@@ -746,6 +751,9 @@ class Decoder(nn.Module):
         h = self.mid.block_1(h, temb, **kwargs)
         h = self.mid.attn_1(h, **kwargs)
         h = self.mid.block_2(h, temb, **kwargs)
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
 
         # upsampling
         for i_level in reversed(range(self.num_resolutions)):
@@ -755,6 +763,9 @@ class Decoder(nn.Module):
                     h = self.up[i_level].attn[i_block](h, **kwargs)
             if i_level != 0:
                 h = self.up[i_level].upsample(h)
+        if comfy.model_management.is_intel_hpu():
+            import habana_frameworks.torch.core as htcore
+            htcore.mark_step()
 
         # end
         if self.give_pre_end:
